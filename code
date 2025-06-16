@@ -1,0 +1,56 @@
+import sys
+import os
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from flask import Flask, request, jsonify, render_template
+import joblib
+import json
+import random
+import numpy as np
+from tensorflow.keras.models import load_model
+from scripts.preprocess import clean_text
+
+model = load_model('model/intent_classifier.h5')
+vectorizer = joblib.load('model/vectorizer.pkl')
+label_encoder = joblib.load('model/label_encoder.pkl')
+
+with open('intents.json', 'r', encoding='utf-8') as file:
+    intents = json.load(file)
+
+intent_responses = {item['tag']: item['responses'] for item in intents['intents']}
+
+app = Flask(__name__)
+
+@app.route('/')
+def index():
+    return render_template('chat_interface.html')
+
+@app.route('/query', methods=['POST'])
+def handle_query():
+    payload = request.get_json()
+    user_input = payload.get('message', '').strip()
+
+    if not user_input:
+        return jsonify({'error': 'Empty message'}), 400
+
+    cleaned_input = clean_text(user_input)
+    if not cleaned_input:
+        return jsonify({'error': 'Invalid input after cleaning'}), 400
+
+    input_vector = vectorizer.transform([cleaned_input]).toarray()
+    predicted_label = model.predict(input_vector, verbose=0)
+    predicted_tag = label_encoder.inverse_transform([np.argmax(predicted_label)])[0]
+
+    response = random.choice(intent_responses.get(predicted_tag, ["Sorry, I don't understand that."]))
+
+    with open('intent_logs.txt', 'a', encoding='utf-8') as log_file:
+        log_file.write(predicted_tag + '\n')
+
+    return jsonify({
+        'intent': predicted_tag,
+        'response': response
+    })
+
+if __name__ == '__main__':
+    app.run(debug=True)
